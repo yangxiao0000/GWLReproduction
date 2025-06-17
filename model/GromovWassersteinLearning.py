@@ -512,11 +512,11 @@ class GromovWassersteinLearning(object):
             for src_idx, indices1 in enumerate(src_loader):
                 for tar_idx, indices2 in enumerate(tar_loader):
                     # Estimate Gromov-Wasserstein discrepancy give current costs
-                    cost_s, cost_t, mu_s, mu_t, index_s, index_t, mask_s, mask_t = \
-                        cost_sampler2(database, indices1, indices2, device)
+                    # cost_s, cost_t, mu_s, mu_t, index_s, index_t, mask_s, mask_t = \
+                    #     cost_sampler2(database, indices1, indices2, device)
 
-                    if hyperpara_dict['display']:
-                        self.plot_result(index_s, index_t, epoch, prefix=hyperpara_dict['prefix'])
+                    # if hyperpara_dict['display']:
+                    #     self.plot_result(index_s, index_t, epoch, prefix=hyperpara_dict['prefix'])
 
                     # if hyperpara_dict['strategy'] == 'hard':
                     #     z = np.random.rand()

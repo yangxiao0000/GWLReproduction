@@ -4,9 +4,8 @@ Matching communication network with email network in the MC3 dataset
 from utils import *
 # import dev.util as util
 import matplotlib.pyplot as plt
-# from model.GromovWassersteinLearning import GromovWassersteinLearning
+from model.GromovWassersteinLearning import GromovWassersteinLearning
 import numpy as np
-# import pickle
 import torch
 import torch.optim as optim
 from torch.optim import lr_scheduler
@@ -40,7 +39,8 @@ if truncate==True:
     f1=f1[:,:100]
     f2=f2[:,:100]
 #feat_noise
-
+num1=adj1.shape[0]
+num2=adj2.shape[0]
 index1= create_number_dict(num1)
 index2= create_number_dict(num2)
 inter1=convert_to_list(a1)
@@ -52,6 +52,11 @@ dataset['src_interactions'] = inter1
 dataset['tar_interactions'] = inter2
 dataset['ground_truth'] = ground_truth
 dataset['mutual_interactions'] = ground_truth.tolist()
+
+
+dataset['cost_s']=1/(adj1+1)
+dataset['cost_t']=1/(adj2+1)
+exit(0)
 
 
 opt_dict = {
@@ -91,7 +96,7 @@ for m in method:
 
         # Gromov-Wasserstein learning
         # gwd_model.train_with_prior(data_mc3, optimizer, opt_dict, scheduler=None)
-        gwd_model.train_without_prior(data_mc3, optimizer, opt_dict, scheduler=None)
+        gwd_model.train_without_prior(dataset, optimizer, opt_dict, scheduler=None)
         
         # save model
         gwd_model.save_model('{}/model_{}_{}.pt'.format(result_folder, m, c))
