@@ -9,33 +9,48 @@ import numpy as np
 import torch
 import torch.optim as optim
 from torch.optim import lr_scheduler
+import argparse
 
-datasetname='facebook'
-truncate= True
-edge_noise=0.0
+parser = argparse.ArgumentParser()
+parser.add_argument('--dataset', type=str, default='cora', help='douban/dblp/cora/citeseer/facebook/ppi')
+# parser.add_argument('--dataset', type=str, default='cora', help='douban/dblp/cora/citeseer/facebook/ppi')
+parser.add_argument('--feat_noise', type=float, default=0.)
+parser.add_argument('--noise_type', type=int, default=0, help='1: permutation, 2: truncation, 3: compression')
+parser.add_argument('--edge_noise', type=float, default=0.)
+parser.add_argument('--output', type=str, default='result.txt')
+parser.add_argument('--epoch', type=int, default=1)
+parser.add_argument('--beta', type=float, default=0.01)
+parser.add_argument('--truncate', type=bool, default=False)
 
-result_folder = 'match_mimic3_2'
+
+args = parser.parse_args()
+
+
+# args.dataset='facebook'
+# truncate= True
+# edge_noise=0.1
+
 cost_type = ['cosine']
 method = ['proximal']
 save_path = '/root/sharedata' 
 
-adj1=torch.load(save_path + '/'+datasetname+'Aadj.pt') 
-adj2=torch.load(save_path + '/'+datasetname+'Badj.pt')
-f1=torch.load(save_path + '/'+datasetname+'Afeat.pt')
-f2=torch.load(save_path + '/'+datasetname+'Bfeat.pt')
-ground_truth=torch.load(save_path + '/'+datasetname+'ground_truth.pt')
+adj1=torch.load(save_path + '/'+args.dataset+'Aadj.pt') 
+adj2=torch.load(save_path + '/'+args.dataset+'Badj.pt')
+f1=torch.load(save_path + '/'+args.dataset+'Afeat.pt')
+f2=torch.load(save_path + '/'+args.dataset+'Bfeat.pt')
+ground_truth=torch.load(save_path + '/'+args.dataset+'ground_truth.pt')
 a1= adjacency_to_edge_matrix(adj1)
 a2= adjacency_to_edge_matrix(adj2)
 # print(a1.shape)
 # exit(0)
 #edge_noise
-if edge_noise > 0:
-    adj1 = torch.tensor(add_noise_edge(a1, adj1, edge_noise)) 
-    adj2 = torch.tensor(add_noise_edge(a2, adj2, edge_noise))
+if args.edge_noise > 0:
+    adj1 = torch.tensor(add_noise_edge(a1, adj1, args.edge_noise)) 
+    adj2 = torch.tensor(add_noise_edge(a2, adj2, args.edge_noise))
     a1 = adjacency_to_edge_matrix(adj1)
     a2 = adjacency_to_edge_matrix(adj2)
 #truncate
-if truncate==True:
+if args.truncate==True:
     f1=f1[:,:100]
     f2=f2[:,:100]
 #feat_noise
@@ -56,51 +71,51 @@ dataset['mutual_interactions'] = ground_truth.tolist()
 
 dataset['cost_s']=1/(adj1+1)
 dataset['cost_t']=1/(adj2+1)
-exit(0)
+# print(dataset['cost_s'].shape, dataset['cost_t'].shape)
+# exit(0)
 
 
 opt_dict = {
             # 'epochs': 30,
-            'epochs': 1,
-            # 'epochs': 5,
+            # 'epochs': 30,
+            'epochs': args.epoch,
             # 'batch_size': 20000,
             'batch_size': 57000,
             # 'batch_size': 32316,
             'use_cuda': True,
-            'strategy': 'soft',
-            'beta': 1e-2,
+            'strategy': 'hard',
+            'beta': args.beta,
             # 'outer_iteration': 10000,
-            'outer_iteration': 10000,
+            'outer_iteration': 3000,
             # 'outer_iteration': 200,
             'inner_iteration': 1,
             # 'inner_iteration': 100,
             'sgd_iteration': 500,
             'prior': False,
-            'prefix': result_folder,
-            'display': False}
+            # 'prefix': result_folder,
+            'display': False,
+            'dataset': args.dataset,
+            'feat_noise': args.feat_noise,
+            'noise_type': args.noise_type,
+            'edge_noise': args.edge_noise,}
 
-for m in method:
-    for c in cost_type:
-        hyperpara_dict = {'src_number': len(dataset['src_index']),
-                          'tar_number': len(dataset['tar_index']),
-                          'dimension': 50,
-                          'loss_type': 'L2',
-                          'cost_type': c,
-                          'ot_method': m}
 
-        gwd_model = GromovWassersteinLearning(hyperpara_dict)
 
-        # initialize optimizer
-        optimizer = optim.Adam(gwd_model.gwl_model.parameters(), lr=1e-3)
-        scheduler = lr_scheduler.ExponentialLR(optimizer, gamma=0.8)
+hyperpara_dict = {'src_number': len(dataset['src_index']),
+                    'tar_number': len(dataset['tar_index']),
+                    'dimension': 50,
+                    'loss_type': 'L2',
+                    'cost_type': 'cosine',
+                    'ot_method': 'proximal'}
 
-        # Gromov-Wasserstein learning
-        # gwd_model.train_with_prior(data_mc3, optimizer, opt_dict, scheduler=None)
-        gwd_model.train_without_prior(dataset, optimizer, opt_dict, scheduler=None)
-        
-        # save model
-        gwd_model.save_model('{}/model_{}_{}.pt'.format(result_folder, m, c))
-        gwd_model.save_recommend('{}/result_{}_{}.pkl'.format(result_folder, m, c))
+gwd_model = GromovWassersteinLearning(hyperpara_dict)
+
+
+optimizer = optim.Adam(gwd_model.gwl_model.parameters(), lr=1e-3)
+scheduler = lr_scheduler.ExponentialLR(optimizer, gamma=0.8)
+
+gwd_model.my_train_without_prior(dataset, optimizer, opt_dict, scheduler=None)
+
 
 
 

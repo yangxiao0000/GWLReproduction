@@ -11,7 +11,7 @@ from sklearn.manifold import TSNE
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-
+import time
 #############################################################################
 def my_check_align(pred, ground_truth, result_file=None):
     g_map = {}
@@ -245,140 +245,6 @@ class GromovWassersteinLearning(object):
         plt.savefig('{}/trans_epoch{}_{}_{}.png'.format(prefix, epoch, self.ot_method, self.cost_type))
         plt.close('all')
 
-    def evaluation_matching(self, trans: np.ndarray, cost_s: np.ndarray, cost_t: np.ndarray,
-                            index_s: np.ndarray, index_t: np.ndarray, mask_s: np.ndarray, mask_t: np.ndarray):
-        """
-        Evaluate graph matching result
-
-        Args:
-            trans: (ns, nt) ndarray
-            cost_s: (ns, ns) ndarray of source cost
-            cost_t: (nt, nt) ndarray of target cost
-            index_s: (ns, ) ndarray of source index
-            index_t: (nt, ) ndarray of target index
-        Returns:
-            nc1: node correctness based on trans: #correctly-matched nodes/#nodes * 100%
-            ec1: edge correctness based on trans: #correctly-matched edges/#edges * 100%
-            nc2: node correctness based on cost_st
-            ec2: edge correctness based on cost_st
-        """
-        nc1 = 0
-        nc2 = 0
-        ec1 = 0
-        ec2 = 0
-
-        num_edges = np.sum(mask_s)
-
-        cost_s += np.eye(trans.shape[0])
-        cost_s = 1 / cost_s
-        cost_s -= 1
-        cost_s[cost_s < 1] = 0
-
-        cost_t += np.eye(trans.shape[1])
-        cost_t = 1 / cost_t
-        cost_t -= 1
-        cost_t[cost_t < 1] = 0
-
-        # edge correctness
-        cost_st = self.gwl_model.mutual_cost_mat(index_s, index_t)
-        cost_st = cost_st.cpu().data.numpy()
-        pair1 = []
-        pair2 = []
-        for i in range(trans.shape[0]):
-            j1 = np.argmax(trans[i, :])
-            j2 = np.argmin(cost_st[i, :])
-            pair1.append(j1)
-            pair2.append(j2)
-            if index_s[i] == index_t[j1]:
-                nc1 += 1
-            if index_s[i] == index_t[j2]:
-                nc2 += 1
-        nc1 = nc1 / trans.shape[0] * 100.
-        nc2 = nc2 / trans.shape[0] * 100.
-
-        idx = np.transpose(np.nonzero(cost_s))
-        for n in range(idx.shape[0]):
-            rs = idx[n, 0]
-            cs = idx[n, 1]
-            rt1 = pair1[rs]
-            rt2 = pair2[rs]
-            ct1 = pair1[cs]
-            ct2 = pair2[cs]
-            if mask_t[rt1, ct1] > 0 or mask_t[ct1, rt1] > 0:
-                ec1 += 1
-            if mask_t[rt2, ct2] > 0 or mask_t[ct2, rt2] > 0:
-                ec2 += 1
-        ec1 = ec1 / num_edges * 100.
-        ec2 = ec2 / num_edges * 100.
-        return nc1, ec1, nc2, ec2
-
-    def evaluation_recommendation(self, database):
-        index_s = torch.LongTensor(list(range(self.src_num)))
-        index_t = torch.LongTensor(list(range(self.tar_num)))
-        cost_st = self.gwl_model.mutual_cost_mat(index_s, index_t)
-        cost_st = cost_st.cpu().data.numpy()
-
-        prec = np.zeros((3,))
-        recall = np.zeros((3,))
-        f1 = np.zeros((3,))
-        tops = [1, 3, 5]
-        num = 0
-        for n in range(len(database['mutual_interactions'])):
-            pair = database['mutual_interactions'][n]
-            source_list = pair[0]
-            target_list = pair[1]
-            prec_n = np.zeros((3,))
-            recall_n = np.zeros((3,))
-            for i in range(len(source_list)):
-                s = source_list[i]
-                if i == 0:
-                    items = cost_st[s, :]
-                else:
-                    items += cost_st[s, :]
-            idx = np.argsort(items)
-            for i in range(len(tops)):
-                top = tops[i]
-                top_items = idx[:(top*len(target_list))]
-                for recommend_item in top_items:
-                    if recommend_item in target_list:
-                        prec_n[i] += 1/top
-                        recall_n[i] += 1/len(target_list)
-            prec_n *= 100
-            recall_n *= 100
-            f1_n = (2*prec_n*recall_n)/(prec_n+recall_n+1e-8)
-            prec += prec_n
-            recall += recall_n
-            f1 += f1_n
-            num += 1
-        # for n in range(len(database['mutual_interactions'])):
-        #     pair = database['mutual_interactions'][n]
-        #     source_list = pair[0]
-        #     target_list = pair[1]
-        #     for s in source_list:
-        #         prec_s = np.zeros((3,))
-        #         recall_s = np.zeros((3,))
-        #
-        #         items = cost_st[s, :]
-        #         idx = np.argsort(items)  # from small to large
-        #         for i in range(len(tops)):
-        #             top = tops[i]
-        #             top_items = idx[:top]
-        #             for recommend_item in top_items:
-        #                 if recommend_item in target_list:
-        #                     prec_s[i] += 1/top
-        #                     recall_s[i] += 1/len(target_list)
-        #         prec_s *= 100
-        #         recall_s *= 100
-        #         f1_s = (2*prec_s*recall_s)/(prec_s+recall_s+1e-8)
-        #
-        #         prec += prec_s
-        #         recall += recall_s
-        #         f1 += f1_s
-        #         num += 1
-        prec /= num
-        recall /= num
-        f1 /= num
-        return prec, recall, f1
 
     def regularized_gromov_wasserstein_discrepancy(self, cost_s, cost_t, cost_mutual, mu_s, mu_t, hyperpara_dict):
         """
@@ -458,155 +324,6 @@ class GromovWassersteinLearning(object):
         d_gw = (cost * trans).sum()
         return trans, d_gw, cost
 
-    def train_without_prior(self, database, optimizer, hyperpara_dict, scheduler=None):
-        """
-        Regularized Gromov-Wasserstein Embedding
-        Args:
-            database: proposed database
-            optimizer: the pytorch optimizer
-            hyperpara_dict: a dictionary of hyperparameters
-                dict = {epochs: the number of epochs,
-                        batch_size: batch size,
-                        use_cuda: use cuda or not,
-                        strategy: hard or soft,
-                        beta: the weight of proximal term
-                        outer_iter: the outer iteration of ipot
-                        inner_iter: the inner iteration of sinkhorn
-                        prior: True or False
-                        }
-            scheduler: scheduler of learning rate.
-        Returns:
-            d_gw, trans
-        """
-        device = torch.device('cuda:0' if hyperpara_dict['use_cuda'] else 'cpu')
-        if hyperpara_dict['use_cuda']:
-            torch.cuda.manual_seed(1)
-        kwargs = {'num_workers': 1, 'pin_memory': True} if hyperpara_dict['use_cuda'] else {}
-
-        self.gwl_model.to(device)
-        self.gwl_model.train()
-        num_src_node = len(database['src_interactions'])
-        num_tar_node = len(database['tar_interactions'])
-        src_loader = DataLoader(IndexSampler(num_src_node),
-                                batch_size=hyperpara_dict['batch_size'],
-                                shuffle=True,
-                                **kwargs)
-        tar_loader = DataLoader(IndexSampler(num_tar_node),
-                                batch_size=hyperpara_dict['batch_size'],
-                                shuffle=True,
-                                **kwargs)
-        # src_loader = DataLoader(IndexSampler(num_src_node),
-        #                         batch_size=num_src_node,
-        #                         shuffle=True,
-        #                         **kwargs)
-        # tar_loader = DataLoader(IndexSampler(num_tar_node),
-        #                         batch_size=num_tar_node,
-        #                         shuffle=True,
-        #                         **kwargs)
-        for epoch in range(hyperpara_dict['epochs']):
-            gw = 0
-            trans_tmp = np.zeros(self.trans.shape)
-            if scheduler is not None:
-                scheduler.step()
-
-            for src_idx, indices1 in enumerate(src_loader):
-                for tar_idx, indices2 in enumerate(tar_loader):
-                    # Estimate Gromov-Wasserstein discrepancy give current costs
-                    # cost_s, cost_t, mu_s, mu_t, index_s, index_t, mask_s, mask_t = \
-                    #     cost_sampler2(database, indices1, indices2, device)
-
-                    # if hyperpara_dict['display']:
-                    #     self.plot_result(index_s, index_t, epoch, prefix=hyperpara_dict['prefix'])
-
-                    # if hyperpara_dict['strategy'] == 'hard':
-                    #     z = np.random.rand()
-                    #     if z < epoch/hyperpara_dict['epochs']:
-                    #         # cost1 = mask_s.data * self.gwl_model.self_cost_mat(index_s, 0).data
-                    #         # cost2 = mask_t.data * self.gwl_model.self_cost_mat(index_t, 1).data
-                    #         cost1 = self.gwl_model.self_cost_mat(index_s, 0).data
-                    #         cost2 = self.gwl_model.self_cost_mat(index_t, 1).data
-                    #         cost12 = self.gwl_model.mutual_cost_mat(index_s, index_t).data
-                    #     else:
-                    #         cost1 = cost_s
-                    #         cost2 = cost_t
-                    #         cost12 = 0
-                    # else:
-                    #     # cost_s_emb = mask_s.data * self.gwl_model.self_cost_mat(index_s, 0).data
-                    #     # cost_t_emb = mask_t.data * self.gwl_model.self_cost_mat(index_t, 1).data
-                    #     cost_s_emb = self.gwl_model.self_cost_mat(index_s, 0).data
-                    #     cost_t_emb = self.gwl_model.self_cost_mat(index_t, 1).data
-                    #     cost_st_12 = self.gwl_model.mutual_cost_mat(index_s, index_t).data
-                    #     # alpha = max([(hyperpara_dict['epochs'] - epoch) / hyperpara_dict['epochs'], 0.5])
-                    #     alpha = (hyperpara_dict['epochs'] - epoch) / hyperpara_dict['epochs']
-                    #     cost1 = alpha * cost_s + (1-alpha) * cost_s_emb
-                    #     cost2 = alpha * cost_t + (1-alpha) * cost_t_emb
-                    #     cost12 = (1-alpha) * cost_st_12
-                    cost1 = cost_s
-                    cost2 = cost_t
-                    cost12 = 0
-
-                    trans, d_gw, cost_12 = self.regularized_gromov_wasserstein_discrepancy(cost1, cost2, cost12,
-                                                                                           mu_s, mu_t, hyperpara_dict)
-                    # estimate optimal transport
-                    trans_np = trans.cpu().data.numpy()
-                    index_s_np = index_s.cpu().data.numpy()
-                    index_t_np = index_t.cpu().data.numpy()
-                    patch = self.trans[index_s_np, :]
-                    patch = patch[:, index_t_np]
-                    energy = np.sum(patch) + 1
-                    for row in range(trans_np.shape[0]):
-                        for col in range(trans_np.shape[1]):
-                            trans_tmp[index_s_np[row], index_t_np[col]] += (energy * trans_np[row, col])
-
-                    gw += d_gw
-
-                    if epoch == 0:
-                        sgd_iter = hyperpara_dict['sgd_iteration']
-                    else:
-                        sgd_iter = 100
-
-                    # # inner iteration based on SGD
-                    # for num in range(sgd_iter):
-                    #     # zero the parameter gradients
-                    #     optimizer.zero_grad()
-                    #     # Update source and target embeddings alternatively
-                    #     loss_gw, loss_w, regularizer = self.gwl_model(index_s, index_t, trans,
-                    #                                                   mu_s, mu_t, cost_s, cost_t,
-                    #                                                   prior=cost_12, mask1=mask_s,
-                    #                                                   mask2=mask_t, mask12=None)
-                    #     loss = 1e3 * loss_gw + 1e3 * loss_w + regularizer
-                    #     loss.backward()
-                    #     optimizer.step()
-                    #     if num % 10 == 0:
-                    #         print('inner {}/{}: loss={:.6f}.'.format(num, sgd_iter, loss.data))
-
-                    nc1, ec1, nc2, ec2 = self.evaluation_matching(trans_np,
-                                                                  cost_s.cpu().data.numpy(),
-                                                                  cost_t.cpu().data.numpy(),
-                                                                  index_s, index_t,
-                                                                  mask_s.cpu().data.numpy(),
-                                                                  mask_t.cpu().data.numpy())
-                    self.NC1.append(nc1)
-                    self.NC2.append(nc2)
-                    self.EC1.append(ec1)
-                    self.EC2.append(ec2)
-
-                    logger.info('Train Epoch: {}'.format(epoch))
-                    logger.info('- node correctness: {:.4f}%, {:.4f}%'.format(nc1, nc2))
-                    logger.info('- edge correctness: {:.4f}%, {:.4f}%'.format(ec1, ec2))
-                    # break
-                if src_idx % 100 == 1:
-                    logger.info('Train Epoch: {} [{}/{} ({:.0f}%)]'.format(
-                        epoch, src_idx * hyperpara_dict['batch_size'],
-                        len(src_loader.dataset), 100. * src_idx / len(src_loader)))
-                # break    
-            logger.info('- GW distance = {:.4f}.'.format(gw/len(src_loader)))
-
-            trans_tmp /= np.max(trans_tmp)
-            self.trans = trans_tmp
-            self.d_gw.append(gw/len(src_loader))
-            # break
-
 
     def my_train_without_prior(self, database, optimizer, hyperpara_dict, scheduler=None):
         """
@@ -653,6 +370,7 @@ class GromovWassersteinLearning(object):
                                 batch_size=num_tar_node,
                                 shuffle=True,
                                 **kwargs)
+        time_st = time.time()
         for epoch in range(hyperpara_dict['epochs']):
             gw = 0
             trans_tmp = np.zeros(self.trans.shape)
@@ -662,228 +380,96 @@ class GromovWassersteinLearning(object):
             for src_idx, indices1 in enumerate(src_loader):
                 for tar_idx, indices2 in enumerate(tar_loader):
                     # Estimate Gromov-Wasserstein discrepancy give current costs
-                    cost_s, cost_t, mu_s, mu_t, index_s, index_t, mask_s, mask_t = \
-                        cost_sampler2(database, indices1, indices2, device)
+                    # cost_s, cost_t, mu_s, mu_t, index_s, index_t, mask_s, mask_t = \
+                    #     cost_sampler2(database, indices1, indices2, device)
 
-                    if hyperpara_dict['display']:
-                        self.plot_result(index_s, index_t, epoch, prefix=hyperpara_dict['prefix'])
+                    # if hyperpara_dict['display']:
+                    #     self.plot_result(index_s, index_t, epoch, prefix=hyperpara_dict['prefix'])
 
-                    if hyperpara_dict['strategy'] == 'hard':
-                        z = np.random.rand()
-                        if z < epoch/hyperpara_dict['epochs']:
-                            # cost1 = mask_s.data * self.gwl_model.self_cost_mat(index_s, 0).data
-                            # cost2 = mask_t.data * self.gwl_model.self_cost_mat(index_t, 1).data
-                            cost1 = self.gwl_model.self_cost_mat(index_s, 0).data
-                            cost2 = self.gwl_model.self_cost_mat(index_t, 1).data
-                            cost12 = self.gwl_model.mutual_cost_mat(index_s, index_t).data
-                        else:
-                            cost1 = cost_s
-                            cost2 = cost_t
-                            cost12 = 0
-                    else:
-                        # cost_s_emb = mask_s.data * self.gwl_model.self_cost_mat(index_s, 0).data
-                        # cost_t_emb = mask_t.data * self.gwl_model.self_cost_mat(index_t, 1).data
-                        cost_s_emb = self.gwl_model.self_cost_mat(index_s, 0).data
-                        cost_t_emb = self.gwl_model.self_cost_mat(index_t, 1).data
-                        cost_st_12 = self.gwl_model.mutual_cost_mat(index_s, index_t).data
-                        # alpha = max([(hyperpara_dict['epochs'] - epoch) / hyperpara_dict['epochs'], 0.5])
-                        alpha = (hyperpara_dict['epochs'] - epoch) / hyperpara_dict['epochs']
-                        cost1 = alpha * cost_s + (1-alpha) * cost_s_emb
-                        cost2 = alpha * cost_t + (1-alpha) * cost_t_emb
-                        cost12 = (1-alpha) * cost_st_12
-                    # cost1 = cost_s
-                    # cost2 = cost_t
-                    # cost12 = 0
+
+                    cost1 = database['cost_s'].cuda()
+                    cost2 = database['cost_t'].cuda()
+                    mu_s= (torch.ones(cost1.shape[1],1)/cost1.shape[1]).cuda()
+                    mu_t= (torch.ones(cost2.shape[1],1)/cost2.shape[1]).cuda()
+                    cost12 = 0
 
                     trans, d_gw, cost_12 = self.regularized_gromov_wasserstein_discrepancy(cost1, cost2, cost12,
                                                                                            mu_s, mu_t, hyperpara_dict)
                     # estimate optimal transport
-                    trans_np = trans.cpu().data.numpy()
-                    index_s_np = index_s.cpu().data.numpy()
-                    index_t_np = index_t.cpu().data.numpy()
-                    patch = self.trans[index_s_np, :]
-                    patch = patch[:, index_t_np]
-                    energy = np.sum(patch) + 1
-                    for row in range(trans_np.shape[0]):
-                        for col in range(trans_np.shape[1]):
-                            trans_tmp[index_s_np[row], index_t_np[col]] += (energy * trans_np[row, col])
+                    # trans_np = trans.cpu().data.numpy()
+                    # index_s_np = index_s.cpu().data.numpy()
+                    # index_t_np = index_t.cpu().data.numpy()
+                    # patch = self.trans[index_s_np, :]
+                    # patch = patch[:, index_t_np]
+                    # energy = np.sum(patch) + 1
+                    # for row in range(trans_np.shape[0]):
+                    #     for col in range(trans_np.shape[1]):
+                    #         trans_tmp[index_s_np[row], index_t_np[col]] += (energy * trans_np[row, col])
 
-                    gw += d_gw
+                    # gw += d_gw
 
-                    if epoch == 0:
-                        sgd_iter = hyperpara_dict['sgd_iteration']
-                    else:
-                        sgd_iter = 100
+                    # if epoch == 0:
+                    #     sgd_iter = hyperpara_dict['sgd_iteration']
+                    # else:
+                    #     sgd_iter = 100
 
                     # inner iteration based on SGD
-                    for num in range(sgd_iter):
-                        # zero the parameter gradients
-                        optimizer.zero_grad()
-                        # Update source and target embeddings alternatively
-                        loss_gw, loss_w, regularizer = self.gwl_model(index_s, index_t, trans,
-                                                                      mu_s, mu_t, cost_s, cost_t,
-                                                                      prior=cost_12, mask1=mask_s,
-                                                                      mask2=mask_t, mask12=None)
-                        loss = 1e3 * loss_gw + 1e3 * loss_w + regularizer
-                        loss.backward()
-                        optimizer.step()
-                        if num % 10 == 0:
-                            print('inner {}/{}: loss={:.6f}.'.format(num, sgd_iter, loss.data))
+                    # for num in range(sgd_iter):
+                    #     # zero the parameter gradients
+                    #     optimizer.zero_grad()
+                    #     # Update source and target embeddings alternatively
+                    #     loss_gw, loss_w, regularizer = self.gwl_model(index_s, index_t, trans,
+                    #                                                   mu_s, mu_t, cost_s, cost_t,
+                    #                                                   prior=cost_12, mask1=mask_s,
+                    #                                                   mask2=mask_t, mask12=None)
+                    #     loss = 1e3 * loss_gw + 1e3 * loss_w + regularizer
+                    #     loss.backward()
+                    #     optimizer.step()
+                    #     if num % 10 == 0:
+                    #         print('inner {}/{}: loss={:.6f}.'.format(num, sgd_iter, loss.data))
 
-                    # nc1, ec1, nc2, ec2 = self.evaluation_matching(trans_np,
-                    #                                               cost_s.cpu().data.numpy(),
-                    #                                               cost_t.cpu().data.numpy(),
-                    #                                               index_s, index_t,
-                    #                                               mask_s.cpu().data.numpy(),
-                    #                                               mask_t.cpu().data.numpy())
-                    nc1, ec1, nc2, ec2 =my_check_align(trans,database['ground_truth'])
-                    self.NC1.append(nc1)
-                    self.NC2.append(nc2)
-                    self.EC1.append(ec1)
-                    self.EC2.append(ec2)
+                    a1, a5, a10, a30 =my_check_align(trans.T,database['ground_truth'])
+                    # self.NC1.append(nc1)
+                    # self.NC2.append(nc2)
+                    # self.EC1.append(ec1)
+                    # self.EC2.append(ec2)
 
-                    logger.info('Train Epoch: {}'.format(epoch))
-                    logger.info('- node correctness: {:.4f}%, {:.4f}%'.format(nc1, nc2))
-                    logger.info('- edge correctness: {:.4f}%, {:.4f}%'.format(ec1, ec2))
+                    # logger.info('Train Epoch: {}'.format(epoch))
+                    # # logger.info('- node correctness: {:.4f}%, {:.4f}%'.format(nc1, nc2))
+                    # # logger.info('- edge correctness: {:.4f}%, {:.4f}%'.format(ec1, ec2))
+                    # logger.info('- node correctness: {:.4f}%, {:.4f}%'.format(nc1, nc2))
+                    
+                    
+                    # print('{} Edge Noise:{} Feat Noise:{} Type:{} GW beta:{}  ep:{}'.format(
+                    #         hyperpara_dict['dataset'], hyperpara_dict['edge_noise'], hyperpara_dict['feat_noise'], hyperpara_dict['noise_type'],hyperpara_dict['gw_beta'], hyperpara_dict['epoch']))
+                    # print('H@1 %.2f%% H@5 %.2f%% H@10 %.2f%% H@30 %.2f%% Time: %.2fs' % (a1 * 100, a5 * 100, a10 * 100, a30 * 100, time_cost))
+                    # with open('result.txt', 'a+') as f:
+                    #     f.write('{} Edge Noise:{} Feat Noise:{} Type:{} Bases:{} GW beta:{} ss:{}, ep:{}\n'.format(
+                    #         args.dataset, args.edge_noise, args.feat_noise, args.noise_type, args.bases, args.gw_beta, args.step_size, args.epoch))
+                    #     f.write('H@1 %.2f%% H@5 %.2f%% H@10 %.2f%% H@30 %.2f%% Time: %.2fs\n ' % (a1 * 100, a5 * 100, a10 * 100, a30 * 100, time_cost))
                     # break
-                if src_idx % 100 == 1:
-                    logger.info('Train Epoch: {} [{}/{} ({:.0f}%)]'.format(
-                        epoch, src_idx * hyperpara_dict['batch_size'],
-                        len(src_loader.dataset), 100. * src_idx / len(src_loader)))
+                # if src_idx % 100 == 1:
+                #     logger.info('Train Epoch: {} [{}/{} ({:.0f}%)]'.format(
+                #         epoch, src_idx * hyperpara_dict['batch_size'],
+                #         len(src_loader.dataset), 100. * src_idx / len(src_loader)))
                 # break    
-            logger.info('- GW distance = {:.4f}.'.format(gw/len(src_loader)))
+            # logger.info('- GW distance = {:.4f}.'.format(gw/len(src_loader)))
 
             trans_tmp /= np.max(trans_tmp)
             self.trans = trans_tmp
             self.d_gw.append(gw/len(src_loader))
+            
+            time_ed = time.time()
+            time_cost = time_ed - time_st
+            print('{} Edge Noise:{} Feat Noise:{} Type:{} GW beta:{}  ep:{}'.format(
+                    hyperpara_dict['dataset'], hyperpara_dict['edge_noise'], hyperpara_dict['feat_noise'], hyperpara_dict['noise_type'],hyperpara_dict['beta'], hyperpara_dict['epochs']))
+            print('H@1 %.2f%% H@5 %.2f%% H@10 %.2f%% H@30 %.2f%% Time: %.2fs' % (a1 * 100, a5 * 100, a10 * 100, a30 * 100, time_cost))
+            with open('result.txt', 'a+') as f:
+                f.write('{} Edge Noise:{} Feat Noise:{} Type:{} GW beta:{}  ep:{}\n'.format(
+                    hyperpara_dict['dataset'], hyperpara_dict['edge_noise'], hyperpara_dict['feat_noise'], hyperpara_dict['noise_type'],hyperpara_dict['beta'], hyperpara_dict['epochs']))
+                f.write('H@1 %.2f%% H@5 %.2f%% H@10 %.2f%% H@30 %.2f%% Time: %.2fs\n ' % (a1 * 100, a5 * 100, a10 * 100, a30 * 100, time_cost))
             # break
 
-
-    def train_with_prior(self, database, optimizer, hyperpara_dict, scheduler=None):
-        """
-        Regularized Gromov-Wasserstein Embedding
-        Args:
-            database: proposed database
-            optimizer: the pytorch optimizer
-            hyperpara_dict: a dictionary of hyperparameters
-                dict = {epochs: the number of epochs,
-                        batch_size: batch size,
-                        use_cuda: use cuda or not,
-                        strategy: hard or soft,
-                        beta: the weight of proximal term
-                        outer_iter: the outer iteration of ipot
-                        inner_iter: the inner iteration of sinkhorn
-                        prior: True or False
-                        }
-            scheduler: scheduler of learning rate.
-        Returns:
-            d_gw, trans
-        """
-        device = torch.device('cuda:0' if hyperpara_dict['use_cuda'] else 'cpu')
-        if hyperpara_dict['use_cuda']:
-            torch.cuda.manual_seed(1)
-        kwargs = {'num_workers': 1, 'pin_memory': True} if hyperpara_dict['use_cuda'] else {}
-
-        self.gwl_model.to(device)
-        self.gwl_model.train()
-        num_interaction = len(database['mutual_interactions'])
-
-        train_base = copy.deepcopy(database)
-        test_base = copy.deepcopy(database)
-        train_base['mutual_interactions'] = train_base['mutual_interactions'][:int(0.75*num_interaction)]
-        test_base['mutual_interactions'] = test_base['mutual_interactions'][int(0.75*num_interaction):]
-        num_interaction_train = len(train_base['mutual_interactions'])
-
-        dataloader = DataLoader(IndexSampler(num_interaction_train),
-                                batch_size=hyperpara_dict['batch_size'],
-                                shuffle=True,
-                                **kwargs)
-
-        for epoch in range(hyperpara_dict['epochs']):
-            gw = 0
-            trans_tmp = np.zeros(self.trans.shape)
-            if scheduler is not None:
-                scheduler.step()
-
-            for batch_idx, indices in enumerate(dataloader):
-                # Estimate Gromov-Wasserstein discrepancy give current costs
-                cost_s, cost_t, mu_s, mu_t, index_s, index_t, prior, mask_s, mask_t, mask_st = \
-                    cost_sampler1(train_base, indices, device)
-
-                self.plot_result(index_s, index_t, epoch, prefix=hyperpara_dict['prefix'])
-
-                if hyperpara_dict['strategy'] == 'hard':
-                    z = np.random.rand()
-                    if z < epoch / hyperpara_dict['epochs']:
-                        cost1 = mask_s.data * self.gwl_model.self_cost_mat(index_s, 0).data
-                        cost2 = mask_t.data * self.gwl_model.self_cost_mat(index_t, 1).data
-                        cost12 = mask_st.data * self.gwl_model.mutual_cost_mat(index_s, index_t).data
-                    else:
-                        cost1 = cost_s
-                        cost2 = cost_t
-                        cost12 = prior
-                else:
-                    cost_s_emb = mask_s.data * self.gwl_model.self_cost_mat(index_s, 0).data
-                    cost_t_emb = mask_t.data * self.gwl_model.self_cost_mat(index_t, 1).data
-                    cost_st_12 = mask_st.data * self.gwl_model.mutual_cost_mat(index_s, index_t).data
-                    alpha = max([(hyperpara_dict['epochs'] - epoch) / hyperpara_dict['epochs'], 0.7])
-                    cost1 = alpha * cost_s + (1 - alpha) * cost_s_emb
-                    cost2 = alpha * cost_t + (1 - alpha) * cost_t_emb
-                    cost12 = alpha * prior + (1 - alpha) * cost_st_12
-
-                trans, d_gw, cost_12 = self.regularized_gromov_wasserstein_discrepancy(cost1, cost2, cost12,
-                                                                                       mu_s, mu_t, hyperpara_dict)
-                # estimate optimal transport
-                trans_np = trans.cpu().data.numpy()
-                index_s_np = index_s.cpu().data.numpy()
-                index_t_np = index_t.cpu().data.numpy()
-                patch = self.trans[index_s_np, :]
-                patch = patch[:, index_t_np]
-                energy = np.sum(patch) + 1
-                for row in range(trans_np.shape[0]):
-                    for col in range(trans_np.shape[1]):
-                        trans_tmp[index_s_np[row], index_t_np[col]] += (energy * trans_np[row, col])
-                gw += d_gw
-
-                # inner iteration based on SGD
-                if epoch == 0:
-                    sgd_iter = hyperpara_dict['sgd_iteration']
-                else:
-                    sgd_iter = 20
-
-                for num in range(sgd_iter):
-                    # zero the parameter gradients
-                    optimizer.zero_grad()
-                    # Update source and target embeddings alternatively
-                    loss_gw, loss_w, regularizer = self.gwl_model(index_s, index_t, trans, mu_s, mu_t,
-                                                                  cost_s, cost_t, prior,  # +0.5*cost_12,
-                                                                  mask_s, mask_t, mask_st)
-                    loss = loss_gw + loss_w + regularizer
-                    loss.backward()
-                    optimizer.step()
-                    if num % 10 == 0:
-                        print('inner {}/{}: loss={:.6f}.'.format(num, sgd_iter, loss.data))
-
-                prec, recall, f1 = self.evaluation_recommendation(test_base)
-                self.Prec.append(prec)
-                self.Recall.append(recall)
-                self.F1.append(f1)
-
-                logger.info('Train Epoch: {}'.format(epoch))
-                logger.info('- OT method={}, Distance={}'.format(self.ot_method, self.cost_type))
-                tops = [1, 3, 5]
-                for top in range(3):
-                    logger.info('- Top-{}, precision={:.4f}%, recall={:.4f}%, f1={:.4f}%'.format(
-                        tops[top], prec[top], recall[top], f1[top]))
-
-                if batch_idx % 100 == 1:
-                    logger.info('Train Epoch: {} [{}/{} ({:.0f}%)]'.format(
-                        epoch, batch_idx * hyperpara_dict['batch_size'],
-                        len(dataloader.dataset), 100. * batch_idx / len(dataloader)))
-            logger.info('- GW distance = {:.4f}.'.format(gw / len(dataloader)))
-            trans_tmp /= np.max(trans_tmp)
-            self.trans = trans_tmp
-            self.d_gw.append(gw / len(dataloader))
 
     def obtain_embedding(self, hyperpara_dict, index, idx):
         device = torch.device('cuda:0' if hyperpara_dict['use_cuda'] else 'cpu')
